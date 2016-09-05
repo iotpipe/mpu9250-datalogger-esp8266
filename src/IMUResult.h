@@ -7,47 +7,17 @@ class IMUResult
 {
 
 	public:
-		IMUResult() { result[0]=0; result[1] = 0; result[2] = 0; }
+		IMUResult(); 
 		void setResult(float x, float y, float z) { result[0] = x; result[1] = y; result[2] = z; }
-		float * getResult() { return &this->result[0]; }
-		virtual void printResult() = 0;
-
+		void getResult(float *destination) { destination[0]=result[0]; destination[1]=result[1]; destination[2]=result[2]; }
+		void printResult();
+		void setName(char* name);
 	protected:
 		float result[3];
+		unsigned long millis;
+		char resultName[16];
 
 };
 
-
-
-
-
-class MagResult : public IMUResult
-{
-	public:
-		void printResult();
-
-};
-
-
-class AccResult : public IMUResult
-{
-	public:
-		void printResult();
-
-};
-
-class GyroResult : public IMUResult
-{
-	public:
-		void printResult();
-
-};
-
-class OrientResult : public IMUResult
-{
-	public:
-		void printResult();
-
-};
 
 #endif

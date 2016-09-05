@@ -103,9 +103,9 @@ void MPU9250::readAccelData(IMUResult * destination)
 
 
   destination->setResult(
-			  (float)count[0]*this->getAres(),// - this->accelBias[0]*this->getAres(),
-			  (float)count[1]*this->getAres(),// - this->accelBias[1]*this->getAres(),
-			  (float)count[2]*this->getAres()// - this->accelBias[2]*this->getAres()
+			  (float)count[0]*this->getAres()*1000.,// - this->accelBias[0]*this->getAres(),
+			  (float)count[1]*this->getAres()*1000.,// - this->accelBias[1]*this->getAres(),
+			  (float)count[2]*this->getAres()*1000.// - this->accelBias[2]*this->getAres()
 			);
 }
 

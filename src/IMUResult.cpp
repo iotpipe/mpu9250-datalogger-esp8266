@@ -1,35 +1,35 @@
 #include "IMUResult.h"
 
-void AccResult::printResult()
+IMUResult::IMUResult()
 {
-  Serial.print("Acceleration (mg): ");
-  Serial.print(this->result[0]*1000, 2);
-  Serial.print(", ");
-  Serial.print(this->result[1]*1000, 2);
-  Serial.print(", ");
-  Serial.println(this->result[2]*1000, 2);
+	result[0]=0; 
+	result[1] = 0; 
+	result[2] = 0; 
+
+	for(int i = 0; i < 16; i++)
+		resultName[i]='\0';
+
 }
-void MagResult::printResult()
+
+//pass in null padded string
+void IMUResult::setName(char *name)
 {
-  Serial.print("Magnetic Field (milli-gauss): ");
-  Serial.print(this->result[0], 2);
-  Serial.print(", ");
-  Serial.print(this->result[1], 2);
-  Serial.print(", ");
-  Serial.println(this->result[2], 2);
+	int len = strlen(name);
+	if(len>15)
+	{
+		Serial.println("Couldn't assign name.  Too long.  Must not exceed 15 characters. Must also be null-terminated.");
+		return;
+	}
+
+	for(int i = 0; i < len; i++)
+		resultName[i] = name[i];
+
 }
-void GyroResult::printResult()
+
+void IMUResult::printResult()
 {
-  Serial.print("Gyro: ");
-  Serial.print(this->result[0], 2);
-  Serial.print(", ");
-  Serial.print(this->result[1], 2);
-  Serial.print(", ");
-  Serial.println(this->result[2], 2);
-}
-void OrientResult::printResult()
-{
-  Serial.print("Yaw, Pitch, Roll: ");
+  Serial.print(this->resultName);
+  Serial.print(": ");
   Serial.print(this->result[0], 2);
   Serial.print(", ");
   Serial.print(this->result[1], 2);

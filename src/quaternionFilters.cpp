@@ -45,17 +45,20 @@ static float q[4] = {1.0f, 0.0f, 0.0f, 0.0f};
 void MadgwickQuaternionUpdate(IMUResult * acc, IMUResult * gyro, IMUResult * mag, float deltat)
 {
 
-  float *res = acc->getResult();
+  float res[3];
+
+  acc->getResult(res);
+  
   float ax = res[0];
   float ay = res[1];
   float az = res[2];
 
-  res = gyro->getResult();
+  gyro->getResult(res);
   float gx = PI/180.0f * res[0];
   float gy = PI/180.0f * res[1];
   float gz = PI/180.0f * res[2];
 
-  res = mag->getResult();
+  mag->getResult(res);
   float mx = res[0];
   float my = res[1];
   float mz = res[2];
@@ -157,17 +160,19 @@ void MadgwickQuaternionUpdate(IMUResult * acc, IMUResult * gyro, IMUResult * mag
 // the error between estimated reference vectors and measured ones.
 void MahonyQuaternionUpdate(IMUResult * acc, IMUResult * gyro, IMUResult * mag, float deltat)
 {
-  float *res = acc->getResult();
+  float res[3];
+
+  acc->getResult(res);
   float ax = res[0];
   float ay = res[1];
   float az = res[2];
 
-  res = gyro->getResult();
+  gyro->getResult(res);
   float gx = PI/180.0f * res[0];
   float gy = PI/180.0f * res[1];
   float gz = PI/180.0f * res[2];
 
-  res = mag->getResult();
+  mag->getResult(res);
   float mx = res[0];
   float my = res[1];
   float mz = res[2];
