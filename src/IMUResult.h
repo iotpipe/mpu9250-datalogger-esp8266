@@ -8,13 +8,13 @@ class IMUResult
 
 	public:
 		IMUResult(); 
-		void setResult(float x, float y, float z) { result[0] = x; result[1] = y; result[2] = z; }
+		void setResult(float x, float y, float z) { result[0] = x; result[1] = y; result[2] = z; milli = millis(); }
 		void getResult(float *destination) { destination[0]=result[0]; destination[1]=result[1]; destination[2]=result[2]; }
 		void printResult();
 		void setName(char* name);
 	protected:
 		float result[3];
-		unsigned long millis;
+		unsigned long milli;
 		char resultName[16];
 
 };
