@@ -65,7 +65,6 @@ int dataStatusPin = 14;
 int sendDataPin = 12;
 
 
-
 void setup()
 {
 
@@ -73,7 +72,8 @@ void setup()
   Serial.setDebugOutput(true);
   WiFi.disconnect(true);
   WiFi.mode(WIFI_STA); 
-  
+
+ 
   //We treat each measurable quantity of the accelerometer as a individual sensor with the name provided tothe setName() function
   magResult.setName("magfield");
   accResult.setName("acceleration");
@@ -139,6 +139,7 @@ void readyToSendData()
 //This connects to wifi and iotpipe server
 void connectToWifiAndSendData()
 {
+  
   bool success = false;
   if(WiFi.status()!=WL_CONNECTED)
   {
@@ -156,13 +157,68 @@ void connectToWifiAndSendData()
     readyToConnect = false;
     client.setServer("broker.iotpipe.io",1883);      
     delay(10);
-    if (!client.connected()) {
-      reconnect();
+        
+
+    //Wait until we make connection with NTP Server.  If we take more than 20 seconds to make connection, we stop and continue collecting data.
+    IotPipe_SNTP timeGetter;    
+    unsigned long absTimeInSeconds=0, timeOffsetInMillis=0;
+    int counter = 0;
+    while(counter<40)
+    {
+      Serial.println("Acquiring time from SNTP server.");
+      Serial.print(".");
+      absTimeInSeconds = (unsigned long)timeGetter.getEpochTimeInSeconds();
+      if(absTimeInSeconds!=0)
+      {
+        timeOffsetInMillis=millis();        
+        Serial.println("");
+        delay(10);
+        break;
+      }
+      delay(500);
+      counter++;
     }
+
+    if(counter==40)
+    {
+      Serial.println("Failed to connect to NTP Server.  Will continue collecting data.");
+      return;
+    }
+
+    String buf="[\n\t"; 
+    
+    int nResults = 0, gp;
+    do
+    {
+      nResults = writer.jsonifyNextResult(buf, absTimeInSeconds, timeOffsetInMillis);        
+      
+      
+      if(buf.length()>2048 | nResults==0)
+      {
+        buf=buf+"\n]";
+        
+        if (!client.connected()) 
+        {
+          reconnect();    
+        }
+        //Publish
+        Serial.println("publishing data to server.");                
+        Serial.println(buf);
+        String topic = iotpipe.get_sampling_topic();
+        client.publish(topic.c_str(),buf.c_str(), buf.length());
+        //Start buf over again.      
+        buf="[\n\t";
+        
+      }           
+      else
+      {
+        buf=buf+",\n\t";        
+      }
+    }while(nResults!=0);
+        
   } 
 }
 
-int counter = 0;
 void loop()
 {
   if(readyToConnect==true)
@@ -196,17 +252,11 @@ void loop()
       //orientResult.printResult();
     }
 
-
-
-
     //Now write values to EEPROM
-    writer.writeResult(accResult);
-    counter++;
-    if (counter % 10 == 0 & counter!=0)
-    {
-      writer.readResults();
-    }
-    
+    writer.writeResult(accResult);  
+    writer.writeResult(gyroResult);  
+    writer.writeResult(magResult);  
+    writer.writeResult(orientResult);  
 
     myIMU.sumCount = 0;
     myIMU.sum = 0;

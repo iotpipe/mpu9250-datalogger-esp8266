@@ -1,6 +1,5 @@
 #include "IMUWriter.h"
-
-
+#include <ArduinoJson.h>
 
 void IMUWriter::writeResult(IMUResult result)
 {
@@ -9,6 +8,56 @@ void IMUWriter::writeResult(IMUResult result)
 	this->writeAnything(this->position, result);
 	this->nResults++;
 	this->position+=sizeof(result);	
+}
+
+int IMUWriter::jsonifyNextResult(String& buf, unsigned long absTimeInSeconds, unsigned long relativeTimeInMillis)
+{
+ 
+	if(readPosition>=position)
+		return 0;
+ 
+	StaticJsonBuffer<max_json_payload_size> jsonBuffer;
+	JsonObject& root = jsonBuffer.createObject();
+
+
+	unsigned long time;
+	unsigned long offSet;
+	int offSetFractionalPart = 0;
+	float data[3];
+	String timeBuf;
+	String xName, yName, zName, name;
+	IMUResult result;
+
+	this->readAnything(readPosition, result);
+
+	result.getResult(data);
+
+	offSet = relativeTimeInMillis - result.getMillis();
+	offSetFractionalPart = offSet % 1000; //This is because the last 3 digits of offSet are discared on the next line when we divide by 1000 to convert from milliseconds to seconds
+	offSet = offSet / 1000.;
+
+	time = absTimeInSeconds - offSet;
+	timeBuf = String(time);
+	timeBuf = timeBuf + String(offSetFractionalPart);
+
+	result.getName(name);
+	xName = "x-" + name;
+	yName = "y-" + name;
+	zName = "z-" + name;
+
+
+	root.set<String>("timestamp", timeBuf);
+	root.set<float>(xName, data[0]);
+	root.set<float>(yName, data[1]);
+	root.set<float>(zName, data[2]);
+
+	readPosition+=sizeof(result);
+
+
+	root.printTo(buf);
+	this->nResults--;
+	return this->nResults;
+
 }
 
 void IMUWriter::readResults()
