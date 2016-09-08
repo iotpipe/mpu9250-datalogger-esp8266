@@ -1,14 +1,42 @@
 #include "IMUWriter.h"
 #include <ArduinoJson.h>
 
+IMUWriter::IMUWriter(eeprom_size_t devCap, byte nDev, unsigned int pgSize, byte busAddr) : extEEPROM(devCap, nDev, pgSize, busAddr) 
+{ 
+	nResults = 0; 
+	position=0; 
+	readPosition=0; 
+	maxStoreableResults=devCap*1000/sizeof(IMUResult); 
+}
+
+
 void IMUWriter::writeResult(IMUResult result)
 {
-	Serial.print("To position ");
-	Serial.println(this->position);
 	this->writeAnything(this->position, result);
 	this->nResults++;
-	this->position+=sizeof(result);	
+	this->position+=sizeof(result);
 }
+
+void IMUWriter::next()
+{
+	this->nResults--;
+	readPosition+=sizeof(IMUResult);
+}
+
+void IMUWriter::previous()
+{
+	this->nResults++;
+	readPosition-=sizeof(IMUResult);
+}
+
+void IMUWriter::printStorage()
+{
+	Serial.print("Storage: ");
+	Serial.print(this->nResults);
+	Serial.print("/");
+	Serial.println(this->maxStoreableResults);
+}
+
 
 int IMUWriter::jsonifyNextResult(String& buf, unsigned long absTimeInSeconds, unsigned long relativeTimeInMillis)
 {
@@ -51,11 +79,8 @@ int IMUWriter::jsonifyNextResult(String& buf, unsigned long absTimeInSeconds, un
 	root.set<float>(yName, data[1]);
 	root.set<float>(zName, data[2]);
 
-	readPosition+=sizeof(result);
-
-
 	root.printTo(buf);
-	this->nResults--;
+
 	return this->nResults;
 
 }

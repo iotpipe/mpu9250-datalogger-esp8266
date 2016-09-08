@@ -39,7 +39,7 @@ PubSubClient client(espClient);
 IotPipe iotpipe(deviceId);
 
 //Debug information
-#define serialDebug true  // Set to true to get Serial output for debugging
+#define serialDebug false  // Set to true to get Serial output for debugging
 #define baudRate 115200
 
 #define samplingRateInMillis 1000
@@ -54,6 +54,7 @@ IMUResult magResult, accResult, gyroResult, orientResult;
 uint32_t lastSample = 0;
 
 
+bool reconnect();
 
 //Wifi status LED (Turns on when connected to Wi-Fi)
 int wifiStatusPin = 13;
@@ -62,8 +63,12 @@ int wifiStatusPin = 13;
 int dataStatusPin = 14;
 
 //Send Data Interrupt Pin (When brought low, device attempts to connect to Wi-Fi and send data.  Status is determined from our two status LEDs)
-int sendDataPin = 12;
+int sendDataPin = 2;
 
+//Error pin.  Turn on for a few seconds when sending data fails
+int errorPin = 12;
+bool inErrorState = false; //this is so we can check in the loop() whether its been long enough to clear the error state
+unsigned long int errorStateStartInMillis = 0;
 
 void setup()
 {
@@ -125,6 +130,8 @@ void setup()
   digitalWrite(wifiStatusPin,LOW);
   pinMode(dataStatusPin, OUTPUT);
   digitalWrite(dataStatusPin,LOW);
+  pinMode(errorPin, OUTPUT);
+  digitalWrite(errorPin,LOW);
   attachInterrupt(digitalPinToInterrupt(sendDataPin), readyToSendData, FALLING);
 }
 
@@ -132,26 +139,79 @@ void setup()
 bool readyToConnect = false;
 void readyToSendData()
 {
+  digitalWrite(errorPin,LOW);  //if we retry sending data we should clear the error led.
   detachInterrupt(digitalPinToInterrupt(sendDataPin));
   readyToConnect = true;
+}
+
+void readyToStopSendingData(bool wasSuccessful)
+{
+  attachInterrupt(digitalPinToInterrupt(sendDataPin), readyToSendData, FALLING);
+  digitalWrite(wifiStatusPin,LOW);
+  digitalWrite(dataStatusPin,LOW);
+  readyToConnect = false;
+
+  if(!wasSuccessful)
+  {
+    errorStateStartInMillis = millis();
+    inErrorState = true;
+    digitalWrite(errorPin,HIGH);
+  }
+  
+}
+
+void checkErrorLED()
+{
+  if(millis() - errorStateStartInMillis > 3000)
+  {
+    digitalWrite(errorPin,LOW);
+    inErrorState = false;
+  }
+}
+
+
+unsigned long previousMillisForDataPinFlash;
+void blinkDataStatusLED()
+{
+  unsigned long currentMillis = millis();
+  int interval = 25;
+  int ledState = digitalRead(dataStatusPin);
+
+  if (currentMillis - previousMillisForDataPinFlash >= interval) {
+
+    // save the last time you blinked the LED
+    previousMillisForDataPinFlash = currentMillis;
+
+    // if the LED is off turn it on and vice-versa:
+    if (ledState == LOW) {
+
+      ledState = HIGH;
+    } else {
+
+      ledState = LOW;
+    }
+
+    // set the LED with the ledState of the variable:
+    digitalWrite(dataStatusPin, ledState);
+  }
 }
 
 //This connects to wifi and iotpipe server
 void connectToWifiAndSendData()
 {
   
-  bool success = false;
+  bool successful = false;
   if(WiFi.status()!=WL_CONNECTED)
   {
-    success = connect_wifi();
+    successful = connect_wifi();
   }
   else
   {
-    success=true;
+    successful=true;
   }
   
-  
-  if(success)
+  //If we successfully connect to wifi OR if we were already connected to wifi
+  if(successful)
   {
     digitalWrite(wifiStatusPin,HIGH);
     readyToConnect = false;
@@ -182,16 +242,20 @@ void connectToWifiAndSendData()
     if(counter==40)
     {
       Serial.println("Failed to connect to NTP Server.  Will continue collecting data.");
+      readyToStopSendingData(false);
       return;
     }
 
     String buf="[\n\t"; 
     
-    int nResults = 0, gp;
+    int nResults = 0, gp, numResultsToSend = 0;
+    previousMillisForDataPinFlash = millis();
     do
     {
-      nResults = writer.jsonifyNextResult(buf, absTimeInSeconds, timeOffsetInMillis);        
-      
+      nResults = writer.jsonifyNextResult(buf, absTimeInSeconds, timeOffsetInMillis);
+      numResultsToSend++;
+      writer.next();        
+      blinkDataStatusLED();
       
       if(buf.length()>2048 | nResults==0)
       {
@@ -199,13 +263,26 @@ void connectToWifiAndSendData()
         
         if (!client.connected()) 
         {
-          reconnect();    
+          digitalWrite(dataStatusPin,LOW); //reconnect() can take a while to complete and we don't want the data status pin in the high state during this time.
+          successful = reconnect();
+          if(successful==false)
+          {
+            //there might be some results in buf that were not sent.  we need to rollback the read position of the IMUWriter
+            for(int i = 0; i < numResultsToSend;i++)
+            {
+              writer.previous();
+            }
+            readyToStopSendingData(false);
+            return;
+          }
         }
         //Publish
         Serial.println("publishing data to server.");                
         Serial.println(buf);
         String topic = iotpipe.get_sampling_topic();
         client.publish(topic.c_str(),buf.c_str(), buf.length());
+        writer.printStorage();
+        numResultsToSend=0;
         //Start buf over again.      
         buf="[\n\t";
         
@@ -214,9 +291,13 @@ void connectToWifiAndSendData()
       {
         buf=buf+",\n\t";        
       }
-    }while(nResults!=0);
-        
+    }while(nResults!=0);            
   } 
+  else
+  {
+    readyToStopSendingData(false);
+  }
+  readyToStopSendingData(true);
 }
 
 void loop()
@@ -226,6 +307,10 @@ void loop()
     connectToWifiAndSendData();
   }
 
+  if(inErrorState==true)
+  {
+    checkErrorLED();
+  }
 
   // If intPin goes high, all data registers have new data
   // On interrupt, check if data ready interrupt
@@ -247,9 +332,9 @@ void loop()
     if (serialDebug)
     {
       accResult.printResult();
-      //gyroResult.printResult();
-      //magResult.printResult();
-      //orientResult.printResult();
+      gyroResult.printResult();
+      magResult.printResult();
+      orientResult.printResult();
     }
 
     //Now write values to EEPROM
@@ -257,11 +342,11 @@ void loop()
     writer.writeResult(gyroResult);  
     writer.writeResult(magResult);  
     writer.writeResult(orientResult);  
-
+    writer.printStorage();
     myIMU.sumCount = 0;
     myIMU.sum = 0;
 
-  }
+  }  
 }
 
 
@@ -311,20 +396,24 @@ bool connect_wifi()
   return true;
 }
 
-void reconnect() {
+bool reconnect() {
   // Loop until we're reconnected
-  while (!client.connected()) {
+  int counter=0;
+  while (!client.connected() & counter<5) {
     Serial.print("Attempting MQTT connection...");
     // Attempt to connect
     if (client.connect("ESP8266Client",mqtt_user,mqtt_pass)) {
       Serial.println("connected");
-    } else {
+    } else 
+    {
       Serial.print("failed, rc=");
       Serial.print(client.state());
       Serial.println(" try again in 5 seconds");
       // Wait 5 seconds before retrying
       delay(5000);
+      counter++;
     }
   }
+  return !(counter==5);
 }
 
