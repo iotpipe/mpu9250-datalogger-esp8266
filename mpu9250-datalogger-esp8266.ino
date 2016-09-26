@@ -1,5 +1,7 @@
 /*
-  This Code is nearly 100% taken from Sparkfuns MPU9250 library, written by Kris Winer.  Some changes have been made to Kris' library in order to make certain actions more convenient and more opaque to the user.  Thanks Kris for your hard work.
+
+  This code creates a data logger which stores accelerometer values from an MPU9250 onto an EEPROM.  An ESP8266 connects to WiFi, when available, to upload the stored data to the IoT Pipe web service.
+  Special thanks to Kris Winer for his awesome MPU9250 library.
 
   Required Libraries:
   1) IoT Pipe
@@ -20,7 +22,6 @@
   SDA/SCL to Pin4 and Pin5 of Adafruit Huzzah, respectively
 */
 #include <ESP8266WiFi.h>
-#include <WiFiClient.h>
 #include <PubSubClient.h>
 #include "src/quaternionFilters.h"
 #include "src/MPU9250.h"
@@ -28,62 +29,55 @@
 #include "src/IMUWriter.h"
 #include "iotpipe.h"
 
-// IoT Pipe Setup.  Go to www.iotpipe.io to create an account!  You can find a tutorial for the ESP8266 at https://iotpipe.io/esp8266
-const char ssid[] = "CenturyLink0638";
-const char password[] = "5nesxjf5kym5nd";
-const char deviceId[] = "e1a211a6ab30c49";
-const char mqtt_user[] = "58d654b5309fff7baca44eb667b5e80";
-const char mqtt_pass[] = "d12d09d1a47dd8b6853da06189e0ebc";
-WiFiClient espClient;
-PubSubClient client(espClient);
-IotPipe iotpipe(deviceId);
+///////////////////////////////////////////////////////////////////
+// IoT Pipe Setup.  Go to www.iotpipe.io to create an account!  
+///////////////////////////////////////////////////////////////////
+const char* ssid = "PLACEHOLDER";
+const char* password = "PLACEHOLDER";
+const char* deviceId = "PLACEHOLDER";
+const char* mqtt_user = "PLACEHOLDER";
+const char* mqtt_pass = "PLACEHOLDER";
+const char* server = "broker.iotpipe.io";
+const int port = 1883;
 
+
+///////////////////////////////////////////////////////////////////
 //Debug information
+///////////////////////////////////////////////////////////////////
 #define serialDebug false  // Set to true to get Serial output for debugging
 #define baudRate 115200
 
+///////////////////////////////////////////////////////////////////
+//Determines how often we sample and send data
+///////////////////////////////////////////////////////////////////
 #define samplingRateInMillis 1000
+#define batchSize 30 //This is the number or events to send to server in single batch.  This is meant to optimize for amount of memory on heap because we may not be able to load entire contents of eeprom into memory to send to server.
+uint32_t lastSample = 0;
 
-
+///////////////////////////////////////////////////////////////////
 //Setup for the Accelerometer
+///////////////////////////////////////////////////////////////////
 #define declination 15.93  //http://www.ngdc.noaa.gov/geomag-web/#declination . This is the declinarion in the easterly direction in degrees.  
 #define calibrateMagnetometer false  //Setting requires requires you to move device in figure 8 pattern when prompted over serial port.  Typically, you do this once, then manually provide the calibration values moving forward.
 MPU9250 myIMU;
 IMUWriter writer(kbits_256, 1, 64, 0x50);  //These are the arguments needed for extEEPROM library.  See their documentation at https://github.com/JChristensen/extEEPROM
 IMUResult magResult, accResult, gyroResult, orientResult;
-uint32_t lastSample = 0;
 
+
+///////////////////////////////////////////////////////////////////
+//Wifi object, MQTT object, and IoT Pipe object
+///////////////////////////////////////////////////////////////////
+WiFiClient espClient;
+PubSubClient client(espClient);
+IotPipe iotpipe(deviceId);
 
 bool reconnect();
-
-//Wifi status LED (Turns on when connected to Wi-Fi)
-int wifiStatusPin = 13;
-
-//Data Sent LED (Turns on when all data has been sent from EEPROM to Server)
-int dataStatusPin = 14;
-
-//Send Data Interrupt Pin (When brought low, device attempts to connect to Wi-Fi and send data.  Status is determined from our two status LEDs)
-int sendDataPin = 2;
-
-//Error pin.  Turn on for a few seconds when sending data fails
-int errorPin = 12;
-bool inErrorState = false; //this is so we can check in the loop() whether its been long enough to clear the error state
-unsigned long int errorStateStartInMillis = 0;
 
 void setup()
 {
 
   Serial.begin(baudRate);
-  Serial.setDebugOutput(true);
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_STA); 
-
- 
-  //We treat each measurable quantity of the accelerometer as a individual sensor with the name provided tothe setName() function
-  magResult.setName("magfield");
-  accResult.setName("acceleration");
-  gyroResult.setName("gyro");
-  orientResult.setName("orientation");
+  Serial.setDebugOutput(true); //Used for more verbose wifi debugging
 
   //Start IMU.  Assumes default SDA and SCL pins 4,5 respectively.
   myIMU.begin();
@@ -122,233 +116,142 @@ void setup()
     myIMU.setMagCalibrationManually(-166, 16, 663);    //Set manually with the results of magCalibrate() if you don't want to calibrate at each device bootup.
                                                        //Note that values will change as seasons change and as you move around globe.  These values are for zip code 98103 in the fall.
 
-  Serial.println("Initialized for active data mode....");
-  
-  //Setup LEDs and buttons
-  pinMode(sendDataPin, INPUT_PULLUP);
-  pinMode(wifiStatusPin, OUTPUT);
-  digitalWrite(wifiStatusPin,LOW);
-  pinMode(dataStatusPin, OUTPUT);
-  digitalWrite(dataStatusPin,LOW);
-  pinMode(errorPin, OUTPUT);
-  digitalWrite(errorPin,LOW);
-  attachInterrupt(digitalPinToInterrupt(sendDataPin), readyToSendData, FALLING);
+  Serial.println("Accelerometer ready");
+
+  WiFi.begin(ssid,password);
+  client.setServer(server, port);
+
+  accResult.setName("acc");
+  gyroResult.setName("gyro");
+  magResult.setName("mag");
+  orientResult.setName("orien");
 }
 
-//This function flips a boolean when it is time to connect to wifi
-bool readyToConnect = false;
-void readyToSendData()
-{
-  digitalWrite(errorPin,LOW);  //if we retry sending data we should clear the error led.
-  detachInterrupt(digitalPinToInterrupt(sendDataPin));
-  readyToConnect = true;
-}
-
-void readyToStopSendingData(bool wasSuccessful)
-{
-  attachInterrupt(digitalPinToInterrupt(sendDataPin), readyToSendData, FALLING);
-  digitalWrite(wifiStatusPin,LOW);
-  digitalWrite(dataStatusPin,LOW);
-  readyToConnect = false;
-
-  if(!wasSuccessful)
-  {
-    errorStateStartInMillis = millis();
-    inErrorState = true;
-    digitalWrite(errorPin,HIGH);
-  }
-  
-}
-
-void checkErrorLED()
-{
-  if(millis() - errorStateStartInMillis > 3000)
-  {
-    digitalWrite(errorPin,LOW);
-    inErrorState = false;
-  }
-}
-
-
-unsigned long previousMillisForDataPinFlash;
-void blinkDataStatusLED()
-{
-  unsigned long currentMillis = millis();
-  int interval = 25;
-  int ledState = digitalRead(dataStatusPin);
-
-  if (currentMillis - previousMillisForDataPinFlash >= interval) {
-
-    // save the last time you blinked the LED
-    previousMillisForDataPinFlash = currentMillis;
-
-    // if the LED is off turn it on and vice-versa:
-    if (ledState == LOW) {
-
-      ledState = HIGH;
-    } else {
-
-      ledState = LOW;
-    }
-
-    // set the LED with the ledState of the variable:
-    digitalWrite(dataStatusPin, ledState);
-  }
-}
-
-//This connects to wifi and iotpipe server
-void connectToWifiAndSendData()
-{
-  
-  bool successful = false;
-  if(WiFi.status()!=WL_CONNECTED)
-  {
-    successful = connect_wifi();
-  }
-  else
-  {
-    successful=true;
-  }
-  
-  //If we successfully connect to wifi OR if we were already connected to wifi
-  if(successful)
-  {
-    digitalWrite(wifiStatusPin,HIGH);
-    readyToConnect = false;
-    client.setServer("broker.iotpipe.io",1883);      
-    delay(10);
-        
-
-    //Wait until we make connection with NTP Server.  If we take more than 20 seconds to make connection, we stop and continue collecting data.
-    IotPipe_SNTP timeGetter;    
-    unsigned long absTimeInSeconds=0, timeOffsetInMillis=0;
-    int counter = 0;
-    while(counter<40)
-    {
-      Serial.println("Acquiring time from SNTP server.");
-      Serial.print(".");
-      absTimeInSeconds = (unsigned long)timeGetter.getEpochTimeInSeconds();
-      if(absTimeInSeconds!=0)
-      {
-        timeOffsetInMillis=millis();        
-        Serial.println("");
-        delay(10);
-        break;
-      }
-      delay(500);
-      counter++;
-    }
-
-    if(counter==40)
-    {
-      Serial.println("Failed to connect to NTP Server.  Will continue collecting data.");
-      readyToStopSendingData(false);
-      return;
-    }
-
-    String buf="[\n\t"; 
-    
-    int nResults = 0, gp, numResultsToSend = 0;
-    previousMillisForDataPinFlash = millis();
-    do
-    {
-      nResults = writer.jsonifyNextResult(buf, absTimeInSeconds, timeOffsetInMillis);
-      numResultsToSend++;
-      writer.next();        
-      blinkDataStatusLED();
-      
-      if(buf.length()>2048 | nResults==0)
-      {
-        buf=buf+"\n]";
-        
-        if (!client.connected()) 
-        {
-          digitalWrite(dataStatusPin,LOW); //reconnect() can take a while to complete and we don't want the data status pin in the high state during this time.
-          successful = reconnect();
-          if(successful==false)
-          {
-            //there might be some results in buf that were not sent.  we need to rollback the read position of the IMUWriter
-            for(int i = 0; i < numResultsToSend;i++)
-            {
-              writer.previous();
-            }
-            readyToStopSendingData(false);
-            return;
-          }
-        }
-        //Publish
-        Serial.println("publishing data to server.");                
-        Serial.println(buf);
-        String topic = iotpipe.get_sampling_topic();
-        client.publish(topic.c_str(),buf.c_str(), buf.length());
-        writer.printStorage();
-        numResultsToSend=0;
-        //Start buf over again.      
-        buf="[\n\t";
-        
-      }           
-      else
-      {
-        buf=buf+",\n\t";        
-      }
-    }while(nResults!=0);            
-  } 
-  else
-  {
-    readyToStopSendingData(false);
-  }
-  readyToStopSendingData(true);
-}
 
 void loop()
 {
-  if(readyToConnect==true)
-  {
-    connectToWifiAndSendData();
-  }
 
-  if(inErrorState==true)
-  {
-    checkErrorLED();
-  }
+	// If intPin goes high, all data registers have new data
+	// On interrupt, check if data ready interrupt
+	if (myIMU.readByte(MPU9250_ADDRESS, INT_STATUS) & 0x01)
+	{
+		myIMU.readAccelData(&accResult);
+		myIMU.readGyroData(&gyroResult);
+		myIMU.readMagData(&magResult);
+	}
 
-  // If intPin goes high, all data registers have new data
-  // On interrupt, check if data ready interrupt
-  if (myIMU.readByte(MPU9250_ADDRESS, INT_STATUS) & 0x01)
-  {
-    myIMU.readAccelData(&accResult);
-    myIMU.readGyroData(&gyroResult);
-    myIMU.readMagData(&magResult);
-  }
+	// Must be called before updating quaternions!
+	myIMU.updateTime();
+	MahonyQuaternionUpdate(&accResult, &gyroResult, &magResult, myIMU.deltat);
+	readOrientation(&orientResult, declination);
 
-  // Must be called before updating quaternions!
-  myIMU.updateTime();
-  MahonyQuaternionUpdate(&accResult, &gyroResult, &magResult, myIMU.deltat);
-  readOrientation(&orientResult, declination);
+	if (millis() - lastSample > samplingRateInMillis)
+	{
+		lastSample = millis();
+		if (serialDebug)
+		{
+			accResult.printResult();
+			gyroResult.printResult();
+			magResult.printResult();
+			orientResult.printResult();
+		}
 
-  if (millis() - lastSample > samplingRateInMillis)
-  {
-    lastSample = millis();
-    if (serialDebug)
-    {
-      accResult.printResult();
-      gyroResult.printResult();
-      magResult.printResult();
-      orientResult.printResult();
-    }
-
-    //Now write values to EEPROM
+    //Write results to EEPROM
     writer.writeResult(accResult);  
     writer.writeResult(gyroResult);  
     writer.writeResult(magResult);  
     writer.writeResult(orientResult);  
     writer.printStorage();
-    myIMU.sumCount = 0;
-    myIMU.sum = 0;
 
-  }  
+
+    //If we are connected to Wi-Fi then lets upload EEPROM contents to Server.  We have a minimum # of results we'll send, however.  
+		if( writer.getNumResults() >= batchSize && connectToMQTT())
+		{
+        prepareForServer();    
+		}
+
+		myIMU.sumCount = 0;
+		myIMU.sum = 0;
+
+	}  
 }
 
+int sendToServer(JsonObject &root)
+{
+  String buf, topic;
+  root.printTo(buf);
+  iotpipe.getSamplingTopic(topic);
+  int suc = client.publish(topic.c_str(),buf.c_str(), buf.length());    
+  return suc; 
+}
+
+void prepareForServer()
+{    
+    Serial.print("There are ");
+    Serial.print(writer.getNumResults());
+    Serial.println(" results.");
+
+    IMUResult result;    
+    int numResultsToSend=0;
+    String payload="";
+    
+    while(writer.getNumResults()!=0)
+    {
+
+      DynamicJsonBuffer jsonBuffer;
+      JsonObject& root = jsonBuffer.createObject();
+      JsonArray *data = &root.createNestedArray("data");      
+      JsonObject &entry = jsonBuffer.createObject();
+
+      numResultsToSend=0;
+      for(int i = 0; i < batchSize; i++)
+      {
+        if(writer.getNumResults()==0)
+        {
+          break;
+        }
+        
+        writer.getNextResult(result);  
+        readResult(result, payload);
+        JsonObject &entry = jsonBuffer.parseObject(payload);
+        data->add(entry);
+        numResultsToSend++;
+        payload="";
+      }
+
+      String buf;
+      Serial.print("Batched message: ");
+      root.printTo(buf);
+      Serial.println(buf);
+
+      Serial.println("Sending batch...");          
+      int suc = sendToServer(root);
+      if(suc==false)
+      {
+        writer.rollBack(numResultsToSend);
+        return;
+      }
+    }                      
+}
+
+void readResult(IMUResult result, String &payload)
+{   
+  String resName;
+  result.getName(resName);
+
+  float vals[3];
+  String names[3];
+
+  names[0]=resName+"_x";
+  names[1]=resName+"_y";
+  names[2]=resName+"_z";
+
+  vals[0] = result.getXComponent();
+  vals[1] = result.getYComponent();
+  vals[2] = result.getZComponent();
+
+  iotpipe.jsonifyResult(&vals[0], &names[0], 3, payload);
+}
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -359,61 +262,9 @@ void loop()
 //
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-long lastMsg = 0;
-char msg[50];
-int value = 0;
-
-bool connect_wifi() 
-{  
-  delay(10);
-
-  // We start by connecting to a WiFi network
-
-  Serial.println();
-  Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
-  
-  WiFi.begin("CenturyLink0638", "5nesxjf5kym5nd");
-  int counter=0;
-  while (WiFi.status() != WL_CONNECTED & counter<20) {
-    delay(500);
-    Serial.print(".");
-    counter++;
-  }
-
-  if(counter==20)
-  {
-    Serial.println("Couldn't connect to wifi.  Will continue collecting data.");
-    return false;
-  }
-
-  Serial.println("");
-  Serial.println("WiFi connected");  
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
-  return true;
-}
-
-bool reconnect() {
-  // Loop until we're reconnected
-  int counter=0;
-  while (!client.connected() & counter<5) {
-    Serial.print("Attempting MQTT connection...");
-    // Attempt to connect
-    if (client.connect("ESP8266Client",mqtt_user,mqtt_pass)) {
-      Serial.println("connected");
-    } else 
-    {
-      Serial.print("failed, rc=");
-      Serial.print(client.state());
-      Serial.println(" try again in 5 seconds");
-      // Wait 5 seconds before retrying
-      delay(5000);
-      counter++;
-    }
-  }
-  return !(counter==5);
+bool connectToMQTT() 
+{    
+    client.connect("ESP8266Client",mqtt_user,mqtt_pass);       
+    return client.connected();
 }
 

@@ -14,6 +14,11 @@ class IMUResult
 		void setName(char* name);
 		void getName(String &buf) { buf = this->resultName; }
 		unsigned long getMillis() { return this->milli; }
+
+		float getXComponent() { return result[0]; }
+		float getYComponent() { return result[1]; }
+		float getZComponent() { return result[2]; }
+
 	protected:
 		float result[3];
 		unsigned long milli;
