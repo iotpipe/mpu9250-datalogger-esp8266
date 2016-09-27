@@ -18,5 +18,10 @@ We most likely won't improve this library further but if we did we would do the 
 1. Make it more generic.  It is currently tied closely to the MPU9250.  Making it more generic for other sensors would be useful and not too hard to do.
 2. Handle situations where device power is turned off or the device is reset.  Currently, if the device is powered off we lose all data stored on the EEPROM.  This is because we don't persist our state between power-ups.
 
+# Special thanks
+We want to especially thank Kris Winter for his awesome MPU9250 library.  You can find it here: https://github.com/kriswiner/MPU-9250
+
+We'd additionally like to thank the authors of the extEEPROM, ArduinoJSON, and PubSubClient libraries for all that they do.
+
 # A final caveat
 This code is not perfect and there are surely errors.  Report them to us @iot_pipe on twitter.  
