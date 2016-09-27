@@ -51,8 +51,9 @@ const int port = 1883;
 //Determines how often we sample and send data
 ///////////////////////////////////////////////////////////////////
 #define samplingRateInMillis 1000
-#define batchSize 30 //This is the number or events to send to server in single batch.  This is meant to optimize for amount of memory on heap because we may not be able to load entire contents of eeprom into memory to send to server.
-uint32_t lastSample = 0;
+#define batchSize 32 //Number or events to send to server in single batch.  This is meant to optimize for amount of memory on heap because we may not be able to load entire contents of eeprom into memory to send to server.
+#define MAX_BACKOFF kbits_256 * 1024 / sizeof(IMUResult) / batchSize  //we backoff attempting to conect to MQTT Server because it a synchronous call which takes a few seconds.
+uint32_t backOffFactor = 1;
 
 ///////////////////////////////////////////////////////////////////
 //Setup for the Accelerometer
@@ -127,7 +128,7 @@ void setup()
   orientResult.setName("orien");
 }
 
-
+uint32_t lastSample = 0;
 void loop()
 {
 
@@ -147,7 +148,39 @@ void loop()
 
 	if (millis() - lastSample > samplingRateInMillis)
 	{
-		lastSample = millis();
+
+		
+    //If we are connected to Wi-Fi then lets upload EEPROM contents to Server.  We have a minimum # of results we'll send, however.  
+    if( writer.getNumResults() >= backOffFactor * batchSize)
+    {
+        if( connectToMQTT() )
+        {
+          prepareForServer();    
+          backOffFactor=1;
+        }
+        else
+        {
+          backOffFactor=backOffFactor*2;
+          if(backOffFactor>MAX_BACKOFF)
+          {
+            backOffFactor = MAX_BACKOFF;
+          }
+          Serial.print("Backing off...");
+          Serial.println(backOffFactor); 
+        }
+    }
+
+    lastSample = millis();
+
+    //Once EEPROM is full we stopped writing results until we upload data to server.
+		  if(writer.getNumResults() == writer.getMaxStoreableResults() )
+    {
+      Serial.println("Stopped collecting data. Waiting for Wi-Fi");
+      return;
+    }
+		
+		
+		
 		if (serialDebug)
 		{
 			accResult.printResult();
@@ -162,13 +195,6 @@ void loop()
     writer.writeResult(magResult);  
     writer.writeResult(orientResult);  
     writer.printStorage();
-
-
-    //If we are connected to Wi-Fi then lets upload EEPROM contents to Server.  We have a minimum # of results we'll send, however.  
-		if( writer.getNumResults() >= batchSize && connectToMQTT())
-		{
-        prepareForServer();    
-		}
 
 		myIMU.sumCount = 0;
 		myIMU.sum = 0;
@@ -264,7 +290,9 @@ void readResult(IMUResult result, String &payload)
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 bool connectToMQTT() 
 {    
+    
     client.connect("ESP8266Client",mqtt_user,mqtt_pass);       
+    Serial.println(client.connected());
     return client.connected();
 }
 

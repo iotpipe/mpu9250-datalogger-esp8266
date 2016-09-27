@@ -6,7 +6,7 @@ IMUWriter::IMUWriter(eeprom_size_t devCap, byte nDev, unsigned int pgSize, byte 
 	nResults = 0; 
 	writePosition=0; 
 	readPosition=0; 
-	maxStoreableResults=devCap*1000/sizeof(IMUResult); 
+	maxStoreableResults=devCap*1024/sizeof(IMUResult); 
 }
 
 void IMUWriter::rollBack(int numStepsBackwards)
@@ -24,9 +24,7 @@ void IMUWriter::writeResult(IMUResult result)
 	this->writePosition+=sizeof(result);
 
 	//If we just reached end of EEPROM don't increment nResults.  Keep it at the max value.
-	if( this->writePosition == this->maxStoreableResults * sizeof(IMUResult) )
-		this->nResults = this->maxStoreableResults;
-	else
+	if(this->nResults<this->maxStoreableResults)
 		this->nResults++;
 
 
@@ -38,7 +36,12 @@ void IMUWriter::writeResult(IMUResult result)
 void IMUWriter::next()
 {
 	this->nResults--;
-	readPosition+=sizeof(IMUResult);
+
+        //When we've read everything in the eeprom, set the readposition equal to the write position.
+	if(this->nResults==0)
+		this->readPosition = this->writePosition;
+	else
+		readPosition+=sizeof(IMUResult);
 
 	//We loop to beginning of eeprom when we reach end (this should only happen if you go a long time without wifi)
 	this->readPosition = this->readPosition % ( this->maxStoreableResults * sizeof(IMUResult) );
@@ -68,8 +71,15 @@ void IMUWriter::readResults()
 
 	IMUResult result;
 
+
+	Serial.print("Write position: ");
+	Serial.println(this->writePosition);
+	Serial.print("Read position: ");
+	Serial.println(this->readPosition);
+
 	while(tempPosition<writePosition)
 	{
+		delay(1);
 		Serial.print(tempPosition);
 		this->readAnything(tempPosition, result);
 		tempPosition+=sizeof(result);

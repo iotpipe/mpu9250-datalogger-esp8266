@@ -5,7 +5,6 @@
 #include "extEEPROM.h"
 #include "IMUResult.h"
 
-#define max_json_payload_size 1024
 
 //Writes IMUResults to EEPROM
 class IMUWriter : public extEEPROM
@@ -20,7 +19,9 @@ class IMUWriter : public extEEPROM
 		template <typename T> void getNextResult(T& value);
 		template <typename T> void peekNextResult(T& value);
 		void rollBack(int numStepsBackwards);
-	private:
+		void printDump();
+		int getMaxStoreableResults() { return this->maxStoreableResults; }
+	protected:
 		void previous();  //moves read position back
 		void next(); //advances read position
 		int nResults; //Number of results currently stored on eeprom
@@ -58,8 +59,10 @@ template <class T> int IMUWriter::readAnything(int ee, T& value)
 {
     byte* p = (byte*)(void*)&value;
     unsigned int i;
+
     for (i = 0; i < sizeof(value); i++)
           *p++ = this->read(ee++);
+
     return i;
 }
 
